@@ -1,0 +1,4 @@
+dekaito193	a2a1a1	1
+tichambers99	b1b1b1b	1
+halo	123	0
+admin	admin	0
