@@ -10,7 +10,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#define BUFF_SIZE 256
+#define BUFF_SIZE 512
 
 void sendToServ(int sock, char mess[], struct sockaddr_in servaddr, int sendBytes) {
   socklen_t len = sizeof(servaddr);
@@ -38,6 +38,9 @@ void recvFromServ(int sock, char mess[], struct sockaddr_in servaddr, int rcvByt
 02 - Login - password
 03 - MenuChat
 04 - Chat 1-1
+41 - Chat 1-1 send and receive message
+42 - Chat 1-1 - save waiting message
+43 - Chat 1-1 - send waiting message
 */
 char* EncodeMessage (char mess[], int code) {
   char *EncodedMess;
@@ -62,6 +65,18 @@ char* EncodeMessage (char mess[], int code) {
   else if (code == 4) {
     *(EncodedMess) = '0';
     *(EncodedMess + 1) = '4';
+  }
+  else if (code == 41) {
+    *(EncodedMess) = '4';
+    *(EncodedMess + 1) = '1';
+  }
+  else if (code == 42) {
+    *(EncodedMess) = '4';
+    *(EncodedMess + 1) = '2';
+  }
+  else if (code == 43) {
+    *(EncodedMess) = '4';
+    *(EncodedMess + 1) = '3';
   }
 
   *(EncodedMess + 2) = ' ';
@@ -125,8 +140,15 @@ int main(int argc, char* argv[]) {
           printf("Disconnect to server...\n");
           // close(sockfd);
         }
-
-        if (fgets(sendline, BUFF_SIZE, stdin) != NULL) {
+        else if (strcmp(recvline, "04 Exit...\n") == 0) {
+          strcpy(sendMess, EncodeMessage(sendline, 02));
+          send(sockfd, sendMess, strlen(sendMess), 0);
+        }
+        else if (strcmp(DecodeMessage(recvline), "43") == 0) {
+          strcpy(sendMess, EncodeMessage(sendline, 43));
+          send(sockfd, sendMess, strlen(sendMess), 0);
+        }
+        else if (fgets(sendline, BUFF_SIZE, stdin) != NULL) {
           text = realloc(text, strlen(text) + 1 + strlen(sendline));
           if (!text) {
             perror("No string");
@@ -152,6 +174,14 @@ int main(int argc, char* argv[]) {
           // Reply chat 1-1
           else if (strcmp(DecodeMessage(recvline), "04") == 0) {
             strcpy(sendMess, EncodeMessage(sendline, 4));
+          }
+          // Reply chat 1-1 to receive and send message
+          else if (strcmp(DecodeMessage(recvline), "41") == 0) {
+            strcpy(sendMess, EncodeMessage(sendline, 41));
+          }
+          // Reply send waiting message
+          else if (strcmp(DecodeMessage(recvline), "42") == 0) {
+            strcpy(sendMess, EncodeMessage(sendline, 42));
           }
           send(sockfd, sendMess, strlen(sendMess), 0);
         }

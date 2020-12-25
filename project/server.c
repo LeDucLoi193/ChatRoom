@@ -28,6 +28,9 @@ typedef struct User {
 typedef struct clients {
   char clientName[MAX];   
   int sock;
+  int receiverSock;
+  int menu_status;  // luu menu nguoi dung dang chon, khoi tao la 0
+  int haveWaitingMessage; // 0 -> no, 1 -> yes
   struct clients *next;
 } clients;
 
@@ -95,32 +98,54 @@ void freeList() {
   }
 }
 
-// void freeClientNode (int socket) {
-//   clients *node = head;
-//   if (head == NULL)
-//     return;
-  
-//   while (node != NULL) {
-//     if (node == head && node->socket == socket) {
-//       head = head->next;
-//       free(node);
-//       return;
-//     }
-//     else if (node->socket == socket) {
+void freeClientNode (int socket) {
+  clients *node = head;
+  if (head == NULL)
+    return;
+  else if (head->sock == socket) {
+    head = node->next;
+    free(node);
+    curClient = head;
+    return;
+  }
+  else if (curClient->sock == socket) {
+    clients *temp = head;
+    while (temp != NULL) {
+      if (temp->next == curClient)
+        break;
+      else
+        temp = temp->next;
+    }
+    temp->next = curClient->next;
+    free(curClient);
+    curClient = temp->next;
+  }
+  else {
+    while (node->next != NULL) {
+      if (node->next->sock == socket) {
+          clients *curClientNode = node->next;
+          node->next = curClientNode->next;
+          free(curClientNode);
+          return;
+      }
+      node = node->next;
+    }
+  }
+}
 
-//     }
-//   }
-// }
 
 void AddClientPort(int new_sock){
   clients *temp = head;
   puts("Connection oke..");
-  int a = 1;
+  
   if(head == NULL) {
     temp = (struct clients *)malloc(sizeof(struct clients));
     // strcpy(temp->clientName, clientName);
     strcpy(temp->clientName, "");
+    temp->receiverSock = 0;
     temp->sock = new_sock;
+    temp->menu_status = 0;
+    temp->haveWaitingMessage = 0;
     temp->next = NULL;
     head = temp;
     curClient = head;
@@ -129,6 +154,9 @@ void AddClientPort(int new_sock){
     clients *new = (struct clients *)malloc(sizeof(struct clients));
     strcpy(new->clientName, "");
     new->sock = new_sock;
+    new->receiverSock = 0;
+    new->menu_status = 0;
+    new->haveWaitingMessage = 0;
     new->next = NULL;
     curClient->next = new;
     curClient = new;
@@ -149,13 +177,44 @@ int AddClientName(int socket, char clientName[]) {
   return 0;
 }
 
+void AddReceiverSocket(int socket, int receiverSock) {
+  // socket: sender's socket
+  clients *temp = head;
+
+  // save receiver socket
+  temp = head;
+  while (temp != NULL) {
+    if (temp->sock == socket) {
+      temp->receiverSock = receiverSock;
+      return;
+    }
+
+    temp = temp->next;
+  }
+}
+
+void AddMenuStatus (int socket, char choice) {
+  clients *temp = head;
+
+  // save receiver socket
+  temp = head;
+  while (temp != NULL) {
+    if (temp->sock == socket) {
+      temp->menu_status = choice - '0';
+      return;
+    }
+
+    temp = temp->next;
+  }
+}
+
 clients* findOnlineUser(char username[]) {
   clients* node = head;
   if (node == NULL)
     return NULL;
   else {
     do {
-      if (strcmp(node->username, username) == 0) {
+      if (strcmp(node->clientName, username) == 0) {
         return node;
       }
       node = node->next;
@@ -165,31 +224,7 @@ clients* findOnlineUser(char username[]) {
   return NULL;
 }
 
-void SendToAll(char msg[], char sender[]) {   
-  clients *temp = head;
-  int clients_socket;
-  int byte;
-
-  clients_socket  = socket(AF_INET, SOCK_STREAM, 0);
-
-  if(clients_socket == -1)
-    perror("Error On Socket(SendToAll)");
-
-  while (temp != NULL) {
-    if (strcmp(temp->clientName, sender) != 0) {
-      byte = send(temp->sock, msg, strlen(msg), 0);
-      printf("%s\n", msg);
-      if (byte == -1)
-        perror("Error on Send(SendToAll");
-      else if (byte == 0)
-        printf("Connection've been closed");
-    }
-    temp = temp->next;
-  }
-}
-
-
-void readFile(char fileName[], FILE *f) {
+void readFileUser(char fileName[], FILE *f) {
   f = fopen(fileName, "r");
   User readUser;
 
@@ -209,7 +244,7 @@ void readFile(char fileName[], FILE *f) {
   return;
 }
 
-void writeFile(char fileName[], FILE *f, User writeUser) {
+void writeFileUser(char fileName[], FILE *f, User writeUser) {
   f = fopen(fileName, "a");
 
   if (f == NULL)
@@ -228,7 +263,7 @@ void writeFile(char fileName[], FILE *f, User writeUser) {
   return;
 }
 
-void writeAllToFile(char fileName[], FILE *f) {
+void writeAllToFileUser(char fileName[], FILE *f) {
   User *node = root;
   remove(fileName);
   f = fopen(fileName, "w");
@@ -281,6 +316,8 @@ char* CutString (char buff[]) {
 03 - MenuChat
 04 - Chat 1-1
 41 - Chat 1-1 send and receive message
+42 - Chat 1-1 - save waiting message
+43 - Chat 1-1 - send waiting message
 */
 char* EncodeMessage (char mess[], int code) {
   char *EncodedMess;
@@ -310,6 +347,14 @@ char* EncodeMessage (char mess[], int code) {
     *(EncodedMess) = '4';
     *(EncodedMess + 1) = '1';
   }
+  else if (code == 42) {
+    *(EncodedMess) = '4';
+    *(EncodedMess + 1) = '2';
+  }
+  else if (code == 43) {
+    *(EncodedMess) = '4';
+    *(EncodedMess + 1) = '3';
+  }
 
   *(EncodedMess + 2) = ' ';
   for (int i=0; i<strlen(mess); ++i) {
@@ -333,29 +378,29 @@ char* DecodeMessage (char mess[]) {
 
 void SendLoginAndExitMenu (int socket) {
   // code: 00
-  char mess[512];
+  char mess[BUFF_SIZE];
   memset(mess, 0, sizeof(mess));
 
   sprintf(mess, "---Welcome---\n1. Login\n2. Exit\nYour choice: ");
-  char encodeMenu[512];
+  char encodeMenu[BUFF_SIZE];
   strcpy(encodeMenu, EncodeMessage(mess, 0));
   send(socket, encodeMenu, strlen(encodeMenu), 0);
 }
 
 void SendLoginMenu (int socket) {
   // Login successfully
-  char mess[512];
+  char mess[BUFF_SIZE];
   memset(mess, 0, sizeof(mess));
 
-  sprintf(mess, "Login successfully\n---Menu chat---\n1. Chat 1-1\n2. Chat group\n3. Exit\nYour choice: ");
-  char encodeMenu[512];
+  sprintf(mess, "---Menu chat---\n1. Chat 1-1\n2. Chat group\n3. Exit\nYour choice: ");
+  char encodeMenu[BUFF_SIZE];
   strcpy(encodeMenu, EncodeMessage(mess, 3));
   send(socket, encodeMenu, strlen(encodeMenu), 0);
 }
 
 void HandleLoginAndExitMenu (int socket, char mess[], fd_set readfds) {
   // code: 01
-  char sendMess[MAX];
+  char sendMess[BUFF_SIZE];
 
   if (mess[3] == '1') {
     // LoginMenu
@@ -378,7 +423,7 @@ void HandleLoginAndExitMenu (int socket, char mess[], fd_set readfds) {
 
 char* HandleLoginUsername (int socket, char mess[], char username[]) {
   // code: 01
-  char sendMess[MAX];
+  char sendMess[BUFF_SIZE];
 
   strcpy(username, CutString(mess));
 
@@ -399,30 +444,54 @@ char* HandleLoginUsername (int socket, char mess[], char username[]) {
 
 void HandleLoginPassword (int socket, char username[], char mess[], char fileName[], FILE *f) {
   // code: 02
-  char sendMess[MAX];
+  char sendMess[BUFF_SIZE];
   char password[MAX];
 
   strcpy(password, CutString(mess));
 
-  User *foundUser = findNode(username);
-  if (strcmp(foundUser->password, password) != 0) {
-    strcpy(sendMess, EncodeMessage("Wrong password. Try again: ", 2));
-    send(socket, sendMess, strlen(sendMess), 0);
-  } 
-  else {
-    foundUser->state = 1;
-    writeAllToFile(fileName, f);
-    readFile(fileName, f);
+  clients *testUser = findOnlineUser(username);
+  if (testUser != NULL) {
     SendLoginMenu(socket);
+  }
+  else {
+    User *foundUser = findNode(username);
+    if (strcmp(foundUser->password, password) != 0) {
+      strcpy(sendMess, EncodeMessage("Wrong password. Try again: ", 2));
+      send(socket, sendMess, strlen(sendMess), 0);
+    } 
+    else {
+      foundUser->state = 1;
+      writeAllToFileUser(fileName, f);
+      readFileUser(fileName, f);
+      AddClientName(socket, username);
+      SendLoginMenu(socket);
+    }
   }
 }
 
 void HandleMenuChat (int socket, char mess[]) {
-  char sendMess[MAX];
+  // code: 03
+  char sendMess[BUFF_SIZE];
+  clients *node = head; // find username
+
+  do {
+    if (node->sock == socket) {
+      break;
+    }
+    node = node->next;
+  } while (node != NULL);
 
   if (mess[3] == '1') {
-    strcpy(sendMess, EncodeMessage("Enter receiver: ", 4));
-    send(socket, sendMess, strlen(sendMess), 0);
+    AddMenuStatus(socket, mess[3]);
+    if (node->haveWaitingMessage == 1) {
+      // check if user have waiting message
+      strcpy(sendMess, EncodeMessage("You have unread message.", 43));
+      send(socket, sendMess, strlen(sendMess), 0);
+    }
+    else {
+      strcpy(sendMess, EncodeMessage("Enter receiver: ", 4));
+      send(socket, sendMess, strlen(sendMess), 0);
+    }
   }
   else if (mess[3] == '2') {
 
@@ -435,17 +504,35 @@ void HandleMenuChat (int socket, char mess[]) {
 }
 
 // Only check sent message to exit or continue
-int HandleChat (int socket, char mess[]) {
-  char sendMess[MAX];
+int HandleChat (int sentSocket, char mess[]) {
+  // code: 41
+  char sendMess[BUFF_SIZE];
 
-  if (strcmp(mess, "exit") == 0 || strcmp(mess, "Exit") == 0) {
-    strcpy(sendMess, EncodeMessage("Exit...Bye bro", 41));
-    send(socket, sendMess, strlen(sendMess), 0);
+  clients* node = head;
+  do {
+    if (node->sock == sentSocket) {
+      break;
+    }
+    node = node->next;
+  } while (node != NULL);
+
+  if (strcmp(CutString(mess), "exit") == 0 || strcmp(CutString(mess), "Exit") == 0) {
+    AddReceiverSocket(sentSocket, 0);
+    AddMenuStatus(sentSocket, '0');
+    strcpy(sendMess, EncodeMessage("Exit...\n", 04));
+    send(sentSocket, sendMess, strlen(sendMess), 0);
+    // strcpy(sendMess, EncodeMessage("Your friend exits..Enter exit to out chat\n", 04));
+    // send(node->receiverSock, sendMess, strlen(sendMess), 0);
     return 0;
   }
   else {
-    strcpy(sendMess, EncodeMessage("Enter message to send: ", 41));
-    send(socket, sendMess, strlen(sendMess), 0);
+    strcpy(mess, CutString(mess));
+    strcpy(sendMess, node->clientName);
+    strcat(sendMess, ": ");
+    strcat(sendMess, mess);
+    strcat(sendMess, "\n");
+    strcpy(sendMess, EncodeMessage(sendMess, 41));
+    send(node->receiverSock, sendMess, strlen(sendMess), 0);
   }
 
   return 1;
@@ -453,24 +540,125 @@ int HandleChat (int socket, char mess[]) {
 
 // return receiver's port
 int HandleSingleChat (int socket, char mess[]) {
-  char sendMess[MAX];
+  // code: 04
+  char sendMess[BUFF_SIZE];
   char username[MAX];
 
   strcpy(username, CutString(mess));
 
-  User *foundUser = findOnlineUser(username);
+  clients *foundUser = findOnlineUser(username);
   if (foundUser == NULL) {
-    strcpy(sendMess, EncodeMessage("Username does not exist. Try again: ", 4));
+    strcpy(sendMess, EncodeMessage("Username does not exist or login yet. Try again: ", 4));
     send(socket, sendMess, strlen(sendMess), 0);
 
     return -1;
   } 
+  else if (foundUser->menu_status == 0) {
+    // User is in another menu -> code: 42
+    AddReceiverSocket(socket, foundUser->sock);
+
+    char buff[BUFF_SIZE];
+    memset(buff, 0, sizeof(buff));
+    printf("aaa\n");
+    sprintf(buff, "User does not choose menu yet or in another menu.\nEnter message to send: ");
+    char encodeMenu[BUFF_SIZE];
+    strcpy(encodeMenu, EncodeMessage(buff, 42));
+    // strcpy(sendMess, EncodeMessage("User does not choose menu yet or in another menu.\n", 04));
+    send(socket, encodeMenu, strlen(encodeMenu), 0);
+  }
   else {
+    AddReceiverSocket(socket, foundUser->sock);
     strcpy(sendMess, EncodeMessage("Enter message to send: ", 41));
     send(socket, sendMess, strlen(sendMess), 0);
   }
   
-  return foundUser->socket;
+  return foundUser->sock;
+}
+
+void HandleSaveWaitMessage (int socket, char mess[], char fileName[], FILE *f) {
+  // User is in another menu -> code: 42
+  char sendMess[BUFF_SIZE];
+
+  f = fopen(fileName, "a");
+  clients *temp = head, *node = head;
+
+  // find sender's name -> temp
+  do {
+    if (temp->sock == socket) {
+      break;
+    }
+    temp = temp->next;
+  } while (temp != NULL);
+  // find receiver's name -> node
+  do {
+    if (node->sock == temp->receiverSock) {
+      break;
+    }
+    node = node->next;
+  } while (node != NULL);
+
+  if (strcmp(CutString(mess), "exit") == 0 || strcmp(CutString(mess), "Exit") == 0) {
+    AddReceiverSocket(socket, 0);
+    AddMenuStatus(socket, '0');
+    strcpy(sendMess, EncodeMessage("Exit...\n", 04));
+    send(socket, sendMess, strlen(sendMess), 0);
+    // strcpy(sendMess, EncodeMessage("Your friend exits..Enter exit to out chat\n", 04));
+    // send(node->receiverSock, sendMess, strlen(sendMess), 0);
+  } 
+  else {
+    if (f == NULL)
+      printf("Cannot read input file!\n");
+    else {
+      fputs("\n", f);
+      fputs(temp->clientName, f);
+      fputs("\t", f);
+      fputs(node->clientName, f);
+      fputs("\t", f);
+      fputs(CutString(mess), f);
+    }
+    node->haveWaitingMessage = 1;
+    strcpy(sendMess, EncodeMessage("Done? If yes, enter exit. If no, enter message to send: ", 42));
+    send(socket, sendMess, strlen(sendMess), 0);
+  }
+
+  fclose(f);
+
+  return;
+}
+
+void HandleSendWaitMessage (int socket, char mess[], char fileName[], FILE *f) {
+  // User is in another menu -> code: 42
+  char sendMess[BUFF_SIZE], sender[BUFF_SIZE], receiver[BUFF_SIZE], message[BUFF_SIZE];
+
+  f = fopen(fileName, "r");
+  clients *temp = head;
+
+  // find receiver's name -> temp
+  do {
+    if (temp->sock == socket) {
+      break;
+    }
+    temp = temp->next;
+  } while (temp != NULL);
+
+  if (f == NULL)
+    printf("Cannot read input file!\n");
+  else {
+    while(!feof(f)) {
+      fscanf(f, "%s\t%s\t%s\n", sender, receiver, message);
+      if (strcmp(receiver, temp->clientName) == 0) {
+        strcpy(sendMess, sender);
+        strcat(sendMess, ": ");
+        strcat(sendMess, message);
+        strcpy(sendMess, EncodeMessage(sendMess, 43));
+        send(socket, sendMess, strlen(sendMess), 0);
+      }
+    }
+  }
+  
+  fclose(f);
+
+  return;
 }
 
 int main(int argc, char* argv[]) {
@@ -483,12 +671,13 @@ int main(int argc, char* argv[]) {
     return 0;
   }
   else {
-    FILE *f = NULL;
-    char fileName[] = "nguoidung.txt";
+    FILE *fUser = NULL, *fMessage = NULL;
+    char fileNameUser[] = "nguoidung.txt";
+    char fileNameMessage[] = "savedmessage.txt";
     char username[MAX];
     int firstChoice, secondChoice;
 
-    readFile(fileName, f);
+    readFileUser(fileNameUser, fUser);
     printNode();
 
     int listenfd, connfd, n, LISTENQ = 4;
@@ -562,6 +751,7 @@ int main(int argc, char* argv[]) {
 
       // check status of clients
       clients *temp = head;
+      
       while (temp != NULL) {
         if (FD_ISSET(temp->sock, &readfds)) {
           if (recv(temp->sock, buff, sizeof(buff), 0) > 0) {
@@ -576,7 +766,7 @@ int main(int argc, char* argv[]) {
             }
             // Handle password
             else if (strcmp(DecodeMessage(buff), "02") == 0) {
-              HandleLoginPassword(temp->sock, username, buff, fileName, f);
+              HandleLoginPassword(temp->sock, username, buff, fileNameUser, fUser);
             }
             // Handle menu-chat
             else if (strcmp(DecodeMessage(buff), "03") == 0) {
@@ -589,6 +779,14 @@ int main(int argc, char* argv[]) {
             // Handle chat 1-1 send and receive message
             else if (strcmp(DecodeMessage(buff), "41") == 0) {
               HandleChat(temp->sock, buff);
+            }
+            // Handle save waiting message
+            else if (strcmp(DecodeMessage(buff), "42") == 0) {
+              HandleSaveWaitMessage(temp->sock, buff, fileNameMessage, fMessage);
+            }
+            // Handle send waiting message
+            else if (strcmp(DecodeMessage(buff), "43") == 0) {
+              HandleSendWaitMessage(temp->sock, buff, fileNameMessage, fMessage);
             }
           }
           else {
